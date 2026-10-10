@@ -1,5 +1,10 @@
 [workspace]
 resolver = "2"
+exclude = [
+    "con-snapshot/gpui-pre",
+    "con-snapshot/gpui-pre-apple",
+    "con-snapshot/gpui-pre-macos",
+]
 members = [
     "crates/acp_thread",
     "crates/acp_tools",
