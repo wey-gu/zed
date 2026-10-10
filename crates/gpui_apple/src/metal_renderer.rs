@@ -490,13 +490,29 @@ impl MetalRenderer {
     }
 
     pub fn draw(&mut self, scene: &Scene) {
+        self.try_draw(scene);
+    }
+
+    /// Draws one scene in the current Core Animation transaction, restoring the
+    /// caller's presentation mode even when a drawable is unavailable.
+    pub fn draw_with_transaction(&mut self, scene: &Scene) -> bool {
+        if self.presents_with_transaction {
+            return self.try_draw(scene);
+        }
+        self.set_presents_with_transaction(true);
+        let presented = self.try_draw(scene);
+        self.set_presents_with_transaction(false);
+        presented
+    }
+
+    fn try_draw(&mut self, scene: &Scene) -> bool {
         let layer = match &self.layer {
             Some(l) => l.clone(),
             None => {
                 log::error!(
                     "draw() called on headless renderer - use render_scene_to_image() instead"
                 );
-                return;
+                return false;
             }
         };
         let viewport_size = layer.drawable_size();
@@ -511,14 +527,14 @@ impl MetalRenderer {
                 "failed to retrieve next drawable, drawable size: {:?}",
                 viewport_size
             );
-            return;
+            return false;
         };
 
         let command_buffer = match self.render_frame(scene, drawable.texture(), viewport_size) {
             Ok(command_buffer) => command_buffer,
             Err(error) => {
                 log::error!("failed to render: {error:#}");
-                return;
+                return false;
             }
         };
 
@@ -530,6 +546,7 @@ impl MetalRenderer {
             command_buffer.present_drawable(drawable);
             command_buffer.commit();
         }
+        true
     }
 
     fn render_frame(
@@ -1706,6 +1723,16 @@ mod tests {
         CVPixelBufferGetBytesPerRowOfPlane, CVPixelBufferLockBaseAddress, CVPixelBufferLockFlags,
         CVPixelBufferUnlockBaseAddress, kCVPixelBufferIOSurfacePropertiesKey,
     };
+
+    #[test]
+    fn transaction_draw_restores_presentation_mode_when_no_layer_is_available() {
+        let mut renderer = MetalRenderer::new_headless(Arc::new(Mutex::new(Default::default())));
+        for previous in [false, true] {
+            renderer.set_presents_with_transaction(previous);
+            assert!(!renderer.draw_with_transaction(&Scene::default()));
+            assert_eq!(renderer.presents_with_transaction, previous);
+        }
+    }
 
     #[test]
     fn render_core_video_surface() {

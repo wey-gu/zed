@@ -1273,6 +1273,11 @@ pub trait PlatformWindow: HasWindowHandle + HasDisplayHandle {
     fn on_close(&self, callback: Box<dyn FnOnce()>);
     fn on_appearance_changed(&self, callback: Box<dyn FnMut()>);
     fn on_button_layout_changed(&self, _callback: Box<dyn FnMut()>) {}
+    /// Requests that the next successfully drawn scene be presented together with
+    /// native child-view and layer updates. Unsupported platforms may ignore this.
+    /// This does not schedule a frame.
+    fn request_native_surface_presentation_sync(&self) {}
+
     fn draw(&self, scene: &Scene);
     fn schedule_frame(&self) {}
     fn sprite_atlas(&self) -> Arc<dyn PlatformAtlas>;

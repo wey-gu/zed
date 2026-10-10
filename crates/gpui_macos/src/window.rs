@@ -655,6 +655,23 @@ unsafe fn apply_simple_fullscreen_plan(
     }
 }
 
+#[derive(Default)]
+struct NativeSurfacePresentationSync {
+    pending: bool,
+}
+
+impl NativeSurfacePresentationSync {
+    fn request(&mut self) {
+        self.pending = true;
+    }
+
+    fn draw(&mut self, draw: impl FnOnce(bool) -> bool) {
+        if draw(self.pending) {
+            self.pending = false;
+        }
+    }
+}
+
 struct MacWindowState {
     handle: AnyWindowHandle,
     foreground_executor: ForegroundExecutor,
@@ -667,6 +684,7 @@ struct MacWindowState {
     cursor_visible: Arc<AtomicBool>,
     frame_source: Option<WindowFrameSource>,
     renderer: renderer::Renderer,
+    native_surface_presentation_sync: NativeSurfacePresentationSync,
     request_frame_callback: Option<Box<dyn FnMut(RequestFrameOptions)>>,
     event_callback: Option<Box<dyn FnMut(PlatformInput) -> gpui::DispatchEventResult>>,
     activate_callback: Option<Box<dyn FnMut(bool)>>,
@@ -1107,6 +1125,7 @@ impl MacWindow {
                     bounds.size.map(|pixels| pixels.as_f32()),
                     false,
                 ),
+                native_surface_presentation_sync: NativeSurfacePresentationSync::default(),
                 request_frame_callback: None,
                 event_callback: None,
                 activate_callback: None,
@@ -2121,9 +2140,25 @@ impl PlatformWindow for MacWindow {
         self.0.as_ref().lock().toggle_tab_bar_callback = Some(callback);
     }
 
+    fn request_native_surface_presentation_sync(&self) {
+        self.0.lock().native_surface_presentation_sync.request();
+    }
+
     fn draw(&self, scene: &gpui::Scene) {
         let mut this = self.0.lock();
-        this.renderer.draw(scene);
+        let MacWindowState {
+            renderer,
+            native_surface_presentation_sync,
+            ..
+        } = &mut *this;
+        native_surface_presentation_sync.draw(|synchronized| {
+            if synchronized {
+                renderer.draw_with_transaction(scene)
+            } else {
+                renderer.draw(scene);
+                true
+            }
+        });
     }
 
     fn sprite_atlas(&self) -> Arc<dyn PlatformAtlas> {
@@ -3963,5 +3998,40 @@ mod tests {
     #[test]
     fn display_id_for_screen_returns_none_for_null_screen() {
         assert_eq!(display_id_for_screen(nil), None);
+    }
+
+    #[test]
+    fn native_surface_sync_coalesces_and_returns_to_async_after_presentation() {
+        let mut sync = NativeSurfacePresentationSync::default();
+        let mut frames = Vec::new();
+        sync.draw(|requested| {
+            frames.push(requested);
+            true
+        });
+        sync.request();
+        sync.request();
+        sync.draw(|requested| {
+            frames.push(requested);
+            true
+        });
+        sync.draw(|requested| {
+            frames.push(requested);
+            true
+        });
+        assert_eq!(frames, [false, true, false]);
+    }
+
+    #[test]
+    fn native_surface_sync_survives_unavailable_drawables_without_forcing_a_frame() {
+        let mut sync = NativeSurfacePresentationSync::default();
+        let mut frames = Vec::new();
+        sync.request();
+        for presented in [false, false, true, true] {
+            sync.draw(|requested| {
+                frames.push(requested);
+                presented
+            });
+        }
+        assert_eq!(frames, [true, true, true, false]);
     }
 }

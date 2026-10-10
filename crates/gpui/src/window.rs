@@ -3092,6 +3092,17 @@ impl Window {
         self.scale_factor
     }
 
+    /// Presents the next successfully drawn scene together with native child-view
+    /// and layer updates on supported platforms (currently macOS).
+    ///
+    /// Call this during prepaint when changing embedded native content geometry
+    /// or visibility. Repeated requests coalesce. It does not schedule a frame;
+    /// ordinary rendering remains asynchronous after the request is consumed.
+    pub fn request_native_surface_presentation_sync(&self) {
+        self.platform_window
+            .request_native_surface_presentation_sync();
+    }
+
     /// Overrides the display scale factor for tests.
     #[cfg(any(test, feature = "test-support"))]
     pub fn set_scale_factor(&mut self, scale_factor: f32) {
@@ -8371,6 +8382,22 @@ mod tests {
                 (scale_factor, expected_bounds, resized_size)
             );
         }
+    }
+
+    #[gpui::test]
+    fn native_surface_sync_is_a_noop_on_unsupported_platforms(cx: &mut TestAppContext) {
+        let window = cx.add_window(|_, _| EmptyView);
+        let platform_window = cx.test_window(window.into());
+        platform_window.simulate_frame_request(RequestFrameOptions::default());
+        let baseline = platform_window.frame_wake_count();
+        let result = window.update(cx, |_, window, _| {
+            window.request_native_surface_presentation_sync();
+            window.request_native_surface_presentation_sync();
+        });
+        assert!(result.is_ok(), "window update failed: {result:?}");
+        assert_eq!(platform_window.frame_wake_count(), baseline);
+        platform_window.simulate_frame_request(RequestFrameOptions::default());
+        assert_eq!(platform_window.frame_wake_count(), baseline);
     }
 
     /// Platforms that stop requesting frames for idle windows (currently web)
